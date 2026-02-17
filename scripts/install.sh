@@ -118,8 +118,9 @@ if [[ ! -f "${DEB_FILE}" ]]; then
     fail ".deb not found at ${DEB_FILE}"
 fi
 
-log "Installing via apt..."
-apt install -y --allow-downgrades "./${DEB_FILE}"
+log "Installing .deb package..."
+dpkg -i --force-overwrite "./${DEB_FILE}"
+apt-get install -f -y
 
 # --- Step 6: GPU / Boot config for 4K ---
 log "Step 6/6: Configuring boot for 4K..."

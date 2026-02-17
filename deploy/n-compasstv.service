@@ -6,10 +6,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/n-compasstv run --playlist /playlist --config /etc/n-compasstv/config.json
-Restart=always
+Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 # Ensure video device access
 SupplementaryGroups=video render audio
