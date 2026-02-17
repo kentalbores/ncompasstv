@@ -73,6 +73,18 @@ func (b *vlcBackend) PlayAll(files []string, stopCh <-chan struct{}) error {
 	b.cmd = exec.Command(b.vlcPath, args...)
 	b.cmd.Stdout = os.Stdout
 	b.cmd.Stderr = os.Stderr
+
+	// On Linux, force VLC's Qt interface to use X11 (via XWayland if on
+	// a Wayland desktop). Wayland does not support client-side window
+	// positioning, which breaks multi-zone layouts. X11 supports
+	// --no-video-deco, --video-x, --video-y, and --fullscreen properly.
+	if runtime.GOOS == "linux" {
+		b.cmd.Env = append(os.Environ(),
+			"QT_QPA_PLATFORM=xcb",
+			"DISPLAY=:0",
+		)
+	}
+
 	cmd := b.cmd
 	b.mu.Unlock()
 
