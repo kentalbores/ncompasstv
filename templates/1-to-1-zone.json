@@ -1,0 +1,23 @@
+{
+  "name": "1 to 1 Zone",
+  "zones": [
+    {
+      "id": "left",
+      "x": 0,
+      "y": 0,
+      "width": 50,
+      "height": 100,
+      "playlist_dir": "/playlist/left",
+      "zindex": 0
+    },
+    {
+      "id": "main",
+      "x": 50,
+      "y": 0,
+      "width": 50,
+      "height": 100,
+      "playlist_dir": "/playlist/main",
+      "zindex": 1
+    }
+  ]
+}

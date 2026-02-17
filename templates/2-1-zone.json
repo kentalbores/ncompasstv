@@ -1,0 +1,32 @@
+{
+  "name": "2-1 Zone",
+  "zones": [
+    {
+      "id": "upper-left",
+      "x": 0,
+      "y": 0,
+      "width": 50,
+      "height": 50,
+      "playlist_dir": "/playlist/upper-left",
+      "zindex": 0
+    },
+    {
+      "id": "lower-left",
+      "x": 0,
+      "y": 50,
+      "width": 50,
+      "height": 50,
+      "playlist_dir": "/playlist/lower-left",
+      "zindex": 1
+    },
+    {
+      "id": "main",
+      "x": 50,
+      "y": 0,
+      "width": 50,
+      "height": 100,
+      "playlist_dir": "/playlist/main",
+      "zindex": 2
+    }
+  ]
+}

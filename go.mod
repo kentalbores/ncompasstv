@@ -3,7 +3,6 @@ module player-native
 go 1.22
 
 require (
-	github.com/adrg/libvlc-go/v3 v3.1.6
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/spf13/cobra v1.8.0
 )

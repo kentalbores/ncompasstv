@@ -1,0 +1,32 @@
+{
+  "name": "NCT Standard Template",
+  "zones": [
+    {
+      "id": "main",
+      "x": 0,
+      "y": 0,
+      "width": 75,
+      "height": 85,
+      "playlist_dir": "/playlist/main",
+      "zindex": 0
+    },
+    {
+      "id": "vertical",
+      "x": 75,
+      "y": 0,
+      "width": 25,
+      "height": 85,
+      "playlist_dir": "/playlist/vertical",
+      "zindex": 1
+    },
+    {
+      "id": "horizontal",
+      "x": 0,
+      "y": 85,
+      "width": 100,
+      "height": 15,
+      "playlist_dir": "/playlist/horizontal",
+      "zindex": 2
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "name": "Standard Template v2",
+  "zones": [
+    {
+      "id": "main",
+      "x": 0,
+      "y": 0,
+      "width": 75,
+      "height": 80,
+      "playlist_dir": "/playlist/main",
+      "zindex": 0
+    },
+    {
+      "id": "vertical",
+      "x": 75,
+      "y": 0,
+      "width": 25,
+      "height": 80,
+      "playlist_dir": "/playlist/vertical",
+      "zindex": 1
+    },
+    {
+      "id": "horizontal-small",
+      "x": 0,
+      "y": 80,
+      "width": 25,
+      "height": 20,
+      "playlist_dir": "/playlist/horizontal-small",
+      "zindex": 2
+    },
+    {
+      "id": "horizontal",
+      "x": 25,
+      "y": 80,
+      "width": 75,
+      "height": 20,
+      "playlist_dir": "/playlist/horizontal",
+      "zindex": 3
+    }
+  ]
+}
