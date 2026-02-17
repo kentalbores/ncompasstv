@@ -85,8 +85,12 @@ if [[ ! -x "$GO_BIN" ]]; then
     GO_BIN=$(which go)
 fi
 
-VERSION=$(git describe --tags --always 2>/dev/null || echo "0.1.0")
+VERSION=$(git describe --tags --always 2>/dev/null || echo "")
 VERSION="${VERSION#v}"
+# Debian requires version to start with a digit.
+if [[ -z "$VERSION" ]] || ! [[ "$VERSION" =~ ^[0-9] ]]; then
+    VERSION="0.1.0"
+fi
 BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
 log "Using Go: $GO_BIN ($(${GO_BIN} version))"
