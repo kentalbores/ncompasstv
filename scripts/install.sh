@@ -79,19 +79,26 @@ cd "${INSTALL_DIR}"
 
 # --- Step 4: Build the binary ---
 log "Step 4/6: Building ${APP} (native CGO + MMAL)..."
-export CGO_ENABLED=1
-export GO111MODULE=on
-export GOPATH=/tmp/go-path
-export GOMODCACHE=/tmp/go-path/pkg/mod
 
-go mod tidy
+GO_BIN="/usr/local/go/bin/go"
+if [[ ! -x "$GO_BIN" ]]; then
+    GO_BIN=$(which go)
+fi
 
 VERSION=$(git describe --tags --always 2>/dev/null || echo "0.1.0")
 VERSION="${VERSION#v}"
 BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
+log "Using Go: $GO_BIN ($(${GO_BIN} version))"
+log "Working directory: $(pwd)"
+log "go.mod module: $(head -1 go.mod)"
+
+GO111MODULE=on CGO_ENABLED=1 GOPATH=/tmp/go-path GOMODCACHE=/tmp/go-path/pkg/mod \
+    ${GO_BIN} mod tidy
+
 mkdir -p build
-go build -trimpath \
+GO111MODULE=on CGO_ENABLED=1 GOPATH=/tmp/go-path GOMODCACHE=/tmp/go-path/pkg/mod \
+    ${GO_BIN} build -trimpath \
     -ldflags "-s -w -X main.version=${VERSION} -X main.buildTime=${BUILD_TIME}" \
     -o "build/${APP}" ./cmd/player
 
