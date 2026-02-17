@@ -4,21 +4,22 @@
 #
 # Install on any Raspberry Pi 5 with a single command:
 #
-#   curl -sSL https://raw.githubusercontent.com/user/n-compasstv/main/scripts/install.sh | sudo bash
+#   curl -sSL https://raw.githubusercontent.com/kentalbores/ncompasstv/main/scripts/install.sh | sudo bash
 #
 # This script:
-#   1. Detects the Pi architecture
-#   2. Downloads the latest .deb from GitHub Releases
-#   3. Installs it via apt (handles dependencies automatically)
-#   4. Configures GPU memory and KMS for 4K playback
+#   1. Clones the repo
+#   2. Installs Go + libVLC dependencies
+#   3. Builds the binary natively on the Pi (CGO + MMAL hardware accel)
+#   4. Creates and installs the .deb package via apt
+#   5. Configures GPU memory and KMS for 4K playback
 # =============================================================================
 
 set -euo pipefail
 
-# ---- CONFIGURATION ----
-# Change this to your GitHub org/user and repo name after pushing.
-GITHUB_REPO="ncompasstv/n-compasstv"
+GITHUB_REPO="kentalbores/ncompasstv"
 APP="n-compasstv"
+GO_VERSION="1.22.5"
+INSTALL_DIR="/tmp/n-compasstv-install"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -31,60 +32,84 @@ fail() { echo -e "${RED}[error]${NC} $1"; exit 1; }
 
 # --- Pre-checks ---
 if [[ $EUID -ne 0 ]]; then
-    fail "This script must be run as root. Use: curl ... | sudo bash"
+    fail "Run with sudo: curl -sSL ... | sudo bash"
 fi
 
-ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)
+ARCH=$(uname -m)
 case "$ARCH" in
-    arm64|aarch64) DEB_ARCH="arm64" ;;
-    amd64|x86_64)  DEB_ARCH="amd64" ;;
-    *)             fail "Unsupported architecture: $ARCH" ;;
+    aarch64) GO_ARCH="arm64"; DEB_ARCH="arm64" ;;
+    x86_64)  GO_ARCH="amd64"; DEB_ARCH="amd64" ;;
+    *)       fail "Unsupported architecture: $ARCH" ;;
 esac
 
 log "=== Installing ${APP} ==="
-log "Architecture: ${DEB_ARCH}"
+log "Architecture: ${ARCH} (${DEB_ARCH})"
 echo ""
 
-# --- Detect latest release ---
-log "Fetching latest release from GitHub..."
-
-if ! command -v curl &>/dev/null; then
-    apt-get update -qq && apt-get install -y curl
-fi
-
-LATEST_TAG=$(curl -sSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" \
-    | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-
-if [[ -z "$LATEST_TAG" ]]; then
-    fail "Could not find latest release. Check that ${GITHUB_REPO} has published releases."
-fi
-
-VERSION="${LATEST_TAG#v}"
-DEB_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_TAG}/${APP}_${VERSION}_${DEB_ARCH}.deb"
-
-log "Latest version: ${VERSION}"
-log "Download URL: ${DEB_URL}"
-
-# --- Download ---
-TMP_DEB="/tmp/${APP}_${VERSION}_${DEB_ARCH}.deb"
-
-log "Downloading .deb package..."
-curl -sSL -o "$TMP_DEB" "$DEB_URL" || fail "Download failed. Check the URL: ${DEB_URL}"
-
-# --- Install VLC dependencies first ---
-log "Installing VLC dependencies..."
+# --- Step 1: System dependencies ---
+log "Step 1/6: Installing system dependencies..."
 apt-get update -qq
 apt-get install -y --no-install-recommends \
+    git \
+    wget \
     libvlc-dev \
     vlc-plugin-base \
-    vlc-plugin-video-output
+    vlc-plugin-video-output \
+    pkg-config \
+    dpkg-dev
 
-# --- Install the .deb ---
-log "Installing ${APP} v${VERSION}..."
-apt install -y "$TMP_DEB"
-rm -f "$TMP_DEB"
+# --- Step 2: Install Go ---
+if command -v go &>/dev/null; then
+    log "Step 2/6: Go already installed ($(go version | awk '{print $3}')), skipping."
+else
+    log "Step 2/6: Installing Go ${GO_VERSION} for ${GO_ARCH}..."
+    wget -q "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" -O /tmp/go.tar.gz
+    rm -rf /usr/local/go
+    tar -C /usr/local -xzf /tmp/go.tar.gz
+    rm /tmp/go.tar.gz
+    echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
+fi
+export PATH=$PATH:/usr/local/go/bin
 
-# --- GPU / Boot config for 4K ---
+# --- Step 3: Clone the repo ---
+log "Step 3/6: Cloning ${GITHUB_REPO}..."
+rm -rf "${INSTALL_DIR}"
+git clone --depth 1 "https://github.com/${GITHUB_REPO}.git" "${INSTALL_DIR}"
+cd "${INSTALL_DIR}"
+
+# --- Step 4: Build the binary ---
+log "Step 4/6: Building ${APP} (native CGO + MMAL)..."
+export CGO_ENABLED=1
+
+go mod tidy
+
+VERSION=$(git describe --tags --always 2>/dev/null || echo "0.1.0")
+VERSION="${VERSION#v}"
+BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+mkdir -p build
+go build -trimpath \
+    -ldflags "-s -w -X main.version=${VERSION} -X main.buildTime=${BUILD_TIME}" \
+    -o "build/${APP}" ./cmd/player
+
+log "Binary built successfully."
+
+# --- Step 5: Build .deb and install ---
+log "Step 5/6: Building .deb package..."
+bash scripts/package.sh "${VERSION}" build
+
+DEB_FILE="build/deb/${APP}_${VERSION}_${DEB_ARCH}.deb"
+
+if [[ ! -f "${DEB_FILE}" ]]; then
+    fail ".deb not found at ${DEB_FILE}"
+fi
+
+log "Installing via apt..."
+apt install -y "./${DEB_FILE}"
+
+# --- Step 6: GPU / Boot config for 4K ---
+log "Step 6/6: Configuring boot for 4K..."
+
 BOOT_CONFIG="/boot/firmware/config.txt"
 [[ ! -f "$BOOT_CONFIG" ]] && BOOT_CONFIG="/boot/config.txt"
 
@@ -111,6 +136,10 @@ if [[ -f /boot/cmdline.txt ]] && ! grep -q "consoleblank=0" /boot/cmdline.txt; t
     NEEDS_REBOOT=true
 fi
 
+# --- Cleanup ---
+cd /
+rm -rf "${INSTALL_DIR}"
+
 # --- Done ---
 echo ""
 log "============================================"
@@ -121,7 +150,7 @@ echo "  Quick start:"
 echo "    sudo cp *.mp4 /playlist/"
 echo "    n-compasstv run"
 echo ""
-echo "  Or as a service:"
+echo "  As a service (starts on boot):"
 echo "    sudo systemctl start n-compasstv"
 echo ""
 echo "  Commands:"
