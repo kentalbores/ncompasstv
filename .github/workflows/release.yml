@@ -1,0 +1,80 @@
+# Build the n-compasstv .deb for RPi5 (arm64) and publish to GitHub Releases.
+# Triggered when you push a version tag: git tag v0.1.0 && git push --tags
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install cross-compilation toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            libvlc-dev \
+            pkg-config \
+            dpkg-dev
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Build arm64 binary
+        env:
+          CGO_ENABLED: "1"
+          GOOS: linux
+          GOARCH: arm64
+          CC: aarch64-linux-gnu-gcc
+          CXX: aarch64-linux-gnu-g++
+          PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
+        run: |
+          mkdir -p build
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=${{ steps.version.outputs.VERSION }} -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o build/n-compasstv ./cmd/player
+
+      - name: Build .deb package
+        run: bash scripts/package.sh "${{ steps.version.outputs.VERSION }}" build
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/deb/n-compasstv_${{ steps.version.outputs.VERSION }}_arm64.deb
+          body: |
+            ## Install on Raspberry Pi 5
+
+            **One-liner install:**
+            ```bash
+            curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | sudo bash
+            ```
+
+            **Or download and install manually:**
+            ```bash
+            wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/n-compasstv_${{ steps.version.outputs.VERSION }}_arm64.deb
+            sudo apt install ./n-compasstv_${{ steps.version.outputs.VERSION }}_arm64.deb
+            ```
+
+            **Then:**
+            ```bash
+            sudo cp *.mp4 /playlist/
+            n-compasstv run
+            ```

@@ -1,0 +1,19 @@
+# Build artifacts
+build/
+*.exe
+*.deb
+
+# Media files (too large for git)
+playlist/
+!playlist/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/

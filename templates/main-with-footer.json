@@ -1,0 +1,23 @@
+{
+  "name": "main-with-footer",
+  "zones": [
+    {
+      "id": "main",
+      "x": 0,
+      "y": 0,
+      "width": 100,
+      "height": 85,
+      "playlist_dir": "/playlist/main",
+      "zindex": 0
+    },
+    {
+      "id": "footer",
+      "x": 0,
+      "y": 85,
+      "width": 100,
+      "height": 15,
+      "playlist_dir": "/playlist/footer",
+      "zindex": 1
+    }
+  ]
+}

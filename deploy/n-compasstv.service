@@ -1,0 +1,37 @@
+[Unit]
+Description=n-compasstv — 4K Hardware-Accelerated Digital Signage Player
+After=network.target local-fs.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/n-compasstv run --playlist /playlist --config /etc/n-compasstv/config.json
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Ensure video device access
+SupplementaryGroups=video render audio
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=512M
+
+# Hardening
+ProtectSystem=strict
+ReadWritePaths=/playlist /etc/n-compasstv /var/log/n-compasstv
+PrivateTmp=true
+NoNewPrivileges=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=n-compasstv
+
+# Environment
+Environment=HOME=/root
+Environment=VLC_PLUGIN_PATH=/usr/lib/vlc/plugins
+
+[Install]
+WantedBy=multi-user.target

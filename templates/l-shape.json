@@ -1,0 +1,32 @@
+{
+  "name": "l-shape",
+  "zones": [
+    {
+      "id": "main",
+      "x": 0,
+      "y": 0,
+      "width": 75,
+      "height": 85,
+      "playlist_dir": "/playlist/main",
+      "zindex": 0
+    },
+    {
+      "id": "sidebar",
+      "x": 75,
+      "y": 0,
+      "width": 25,
+      "height": 100,
+      "playlist_dir": "/playlist/sidebar",
+      "zindex": 1
+    },
+    {
+      "id": "footer",
+      "x": 0,
+      "y": 85,
+      "width": 75,
+      "height": 15,
+      "playlist_dir": "/playlist/footer",
+      "zindex": 2
+    }
+  ]
+}
