@@ -4,8 +4,8 @@ build/
 *.deb
 
 # Media files (too large for git)
-playlist/
-!playlist/.gitkeep
+/playlist/
+!/playlist/.gitkeep
 
 # IDE
 .vscode/
