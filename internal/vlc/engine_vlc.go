@@ -1,12 +1,11 @@
-// Unified VLC backend using subprocess. Works on all platforms.
-// Each zone gets its own VLC process with per-zone window configuration.
+// Unified VLC backend using subprocess.
 //
-// This approach:
-//   - Gives per-zone window control (position, size, decorations)
-//   - Gapless playback via --loop
-//   - Hardware acceleration via --avcodec-hw=any
-//   - No CGO needed (cross-compilable)
-//   - --no-video-deco works because Qt interface is loaded in CLI VLC
+// Linux:   Uses cvlc (VLC without Qt GUI) + xdotool for window positioning.
+//          cvlc shows ONLY the video — no menus, no controls, no decorations.
+//          xdotool sets override-redirect which removes the window from WM
+//          control entirely (no title bar, no taskbar entry, exact positioning).
+//
+// Windows: Uses vlc.exe with Qt kiosk flags for development testing.
 package vlc
 
 import (
@@ -16,7 +15,9 @@ import (
 	"os/exec"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"player-native/internal/media"
 	"player-native/internal/template"
@@ -74,13 +75,8 @@ func (b *vlcBackend) PlayAll(files []string, stopCh <-chan struct{}) error {
 	b.cmd.Stdout = os.Stdout
 	b.cmd.Stderr = os.Stderr
 
-	// On Linux, force VLC's Qt interface to use X11 (via XWayland if on
-	// a Wayland desktop). Wayland does not support client-side window
-	// positioning, which breaks multi-zone layouts. X11 supports
-	// --no-video-deco, --video-x, --video-y, and --fullscreen properly.
 	if runtime.GOOS == "linux" {
 		b.cmd.Env = append(os.Environ(),
-			"QT_QPA_PLATFORM=xcb",
 			"DISPLAY=:0",
 		)
 	}
@@ -90,6 +86,11 @@ func (b *vlcBackend) PlayAll(files []string, stopCh <-chan struct{}) error {
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("vlc start failed: %w", err)
+	}
+
+	// On Linux, use xdotool to position the window after it appears.
+	if runtime.GOOS == "linux" && cmd.Process != nil {
+		go b.positionWindow(cmd.Process.Pid)
 	}
 
 	doneCh := make(chan error, 1)
@@ -107,52 +108,81 @@ func (b *vlcBackend) PlayAll(files []string, stopCh <-chan struct{}) error {
 }
 
 func (b *vlcBackend) buildArgs(files []string) []string {
-	args := []string{
-		// === KIOSK: nothing visible except video ===
-		"--no-video-deco",        // No window title bar or borders
-		"--video-on-top",         // Always on top of everything
-		"--no-video-title-show",  // No filename overlay
-		"--no-osd",               // No on-screen display
-		"--no-spu",               // No subtitles
-		"--mouse-hide-timeout=0", // Hide cursor immediately
-		"--no-qt-fs-controller",  // No fullscreen controller bar
-		"--no-qt-name-in-title",  // No "VLC" in title
-		"--no-qt-privacy-ask",    // Skip privacy dialog
+	if runtime.GOOS == "linux" {
+		return b.buildLinuxArgs(files)
+	}
+	return b.buildWindowsArgs(files)
+}
 
-		// === PLAYBACK ===
-		"--loop",      // Loop playlist forever
+// buildLinuxArgs builds flags for cvlc (no Qt interface).
+// Window positioning is handled by xdotool, not VLC flags.
+func (b *vlcBackend) buildLinuxArgs(files []string) []string {
+	args := []string{
+		"--no-video-title-show", // No filename overlay
+		"--no-osd",              // No on-screen display
+		"--no-spu",              // No subtitles
+
+		"--loop",      // Loop playlist
 		"--no-random", // Maintain order
 
-		// === HARDWARE DECODING ===
-		"--avcodec-hw=any",           // Auto-detect (DXVA2, V4L2 M2M, VAAPI)
-		"--avcodec-threads=0",        // Auto-detect core count
-		"--avcodec-skiploopfilter=0", // Keep deblocking filter
+		"--avcodec-hw=any",           // HW decode (V4L2 M2M on RPi5)
+		"--avcodec-threads=0",        // Auto-detect cores
+		"--avcodec-skiploopfilter=0", // Keep deblocking
 
-		// === BUFFERING ===
-		"--file-caching=8000",    // 8s file read-ahead (4K files are large)
-		"--network-caching=3000", // 3s network buffer
-		"--live-caching=3000",    // 3s live buffer
-		"--disc-caching=3000",    // 3s disc buffer
+		"--file-caching=8000",
+		"--network-caching=3000",
+		"--live-caching=3000",
+		"--disc-caching=3000",
 
-		// === TIMING ===
-		"--clock-jitter=0", // Tight clock sync
-		"--deinterlace=0",  // Off (4K content is progressive)
+		"--clock-jitter=0",
+		"--deinterlace=0",
 
-		// === IMAGE ===
+		"--aout=alsa",
+
 		"--image-duration=" + strconv.Itoa(media.DefaultImageDuration),
 
 		"--quiet",
 	}
 
-	// Platform-specific output modules.
-	switch runtime.GOOS {
-	case "windows":
-		args = append(args, "--vout=direct3d11")
-	case "linux":
-		args = append(args, "--aout=alsa")
+	args = append(args, files...)
+	return args
+}
+
+// buildWindowsArgs builds flags for vlc.exe (Qt interface with kiosk flags).
+func (b *vlcBackend) buildWindowsArgs(files []string) []string {
+	args := []string{
+		"--no-video-deco",
+		"--video-on-top",
+		"--no-video-title-show",
+		"--no-osd",
+		"--no-spu",
+		"--mouse-hide-timeout=0",
+		"--no-qt-fs-controller",
+		"--no-qt-name-in-title",
+		"--no-qt-privacy-ask",
+
+		"--loop",
+		"--no-random",
+
+		"--avcodec-hw=any",
+		"--avcodec-threads=0",
+		"--avcodec-skiploopfilter=0",
+
+		"--file-caching=8000",
+		"--network-caching=3000",
+		"--live-caching=3000",
+		"--disc-caching=3000",
+
+		"--clock-jitter=0",
+		"--deinterlace=0",
+
+		"--vout=direct3d11",
+
+		"--image-duration=" + strconv.Itoa(media.DefaultImageDuration),
+
+		"--quiet",
 	}
 
-	// Zone positioning: fullscreen OR exact window placement.
 	if b.isFullZone {
 		args = append(args, "--fullscreen")
 	} else {
@@ -160,7 +190,6 @@ func (b *vlcBackend) buildArgs(files []string) []string {
 		pixelY := b.zone.Y * b.screenH / 100
 		pixelW := b.zone.Width * b.screenW / 100
 		pixelH := b.zone.Height * b.screenH / 100
-
 		args = append(args,
 			"--width="+strconv.Itoa(pixelW),
 			"--height="+strconv.Itoa(pixelH),
@@ -171,6 +200,55 @@ func (b *vlcBackend) buildArgs(files []string) []string {
 
 	args = append(args, files...)
 	return args
+}
+
+// positionWindow uses xdotool to position the VLC video window.
+// override-redirect removes the window from WM control entirely:
+//   - No title bar or borders (WM doesn't draw decorations)
+//   - No taskbar entry
+//   - Exact pixel positioning
+//   - Stays exactly where placed
+func (b *vlcBackend) positionWindow(pid int) {
+	pixelW := b.zone.Width * b.screenW / 100
+	pixelH := b.zone.Height * b.screenH / 100
+	pixelX := b.zone.X * b.screenW / 100
+	pixelY := b.zone.Y * b.screenH / 100
+
+	if b.isFullZone {
+		pixelW = b.screenW
+		pixelH = b.screenH
+		pixelX = 0
+		pixelY = 0
+	}
+
+	pidStr := strconv.Itoa(pid)
+	wStr := strconv.Itoa(pixelW)
+	hStr := strconv.Itoa(pixelH)
+	xStr := strconv.Itoa(pixelX)
+	yStr := strconv.Itoa(pixelY)
+
+	for attempt := 0; attempt < 50; attempt++ {
+		time.Sleep(200 * time.Millisecond)
+
+		out, err := exec.Command("xdotool", "search", "--pid", pidStr).Output()
+		if err != nil || strings.TrimSpace(string(out)) == "" {
+			continue
+		}
+
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		windowID := lines[len(lines)-1]
+
+		exec.Command("xdotool", "set_window", "--overrideredirect", "1", windowID).Run()
+		exec.Command("xdotool", "windowsize", windowID, wStr, hStr).Run()
+		exec.Command("xdotool", "windowmove", windowID, xStr, yStr).Run()
+		exec.Command("xdotool", "windowactivate", windowID).Run()
+		exec.Command("xdotool", "windowraise", windowID).Run()
+
+		log.Printf("[vlc:%s] window %s positioned at %s,%s %sx%s (override-redirect)",
+			b.zone.ID, windowID, xStr, yStr, wStr, hStr)
+		return
+	}
+	log.Printf("[vlc:%s] warning: could not find window for PID %d after 10s", b.zone.ID, pid)
 }
 
 func (b *vlcBackend) Stop() {
@@ -192,6 +270,18 @@ func (b *vlcBackend) kill() {
 }
 
 func findVLC() (string, error) {
+	// On Linux, prefer cvlc (VLC without Qt GUI — just video, no menus/controls).
+	if runtime.GOOS == "linux" {
+		for _, name := range []string{"cvlc", "/usr/bin/cvlc"} {
+			if path, err := exec.LookPath(name); err == nil {
+				return path, nil
+			}
+			if _, err := os.Stat(name); err == nil {
+				return name, nil
+			}
+		}
+	}
+
 	if path, err := exec.LookPath("vlc"); err == nil {
 		return path, nil
 	}
@@ -209,6 +299,7 @@ func findVLC() (string, error) {
 		}
 	default:
 		candidates = []string{
+			"/usr/bin/cvlc",
 			"/usr/bin/vlc",
 			"/snap/bin/vlc",
 		}
@@ -220,5 +311,5 @@ func findVLC() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("VLC not found — install from https://www.videolan.org/vlc/")
+	return "", fmt.Errorf("VLC not found — install with: sudo apt install vlc")
 }
