@@ -1,7 +1,8 @@
 //go:build linux && arm64
 
-// Production backend: CGO bindings to libVLC with RPi5 MMAL hardware acceleration.
+// Production backend: CGO bindings to libVLC with RPi5 hardware acceleration.
 // Uses libVLC's MediaList + ListPlayer for true gapless playback per zone.
+// RPi5 uses VideoCore VII — video output auto-detected (KMS/X11).
 // This file only compiles on linux/arm64 (the Raspberry Pi 5 target).
 package vlc
 
@@ -40,12 +41,16 @@ func (b *prodBackend) Init(zone template.Zone, screenW, screenH int) error {
 	// Initialize libVLC once globally (shared across all zones).
 	vlcInitOnce.Do(func() {
 		flags := []string{
-			// --- RPi5 Hardware Acceleration ---
-			"--vout=mmal_vout",           // MMAL video output — bypasses desktop compositor
-			"--codec=mmal_decoder",       // MMAL hardware decoder for H.264/HEVC
-			"--no-xlib",                  // Skip X11 — render via DRM/KMS directly
+			// --- RPi5 Hardware Decoding ---
+			// RPi5 uses VideoCore VII — MMAL is deprecated.
+			// Let VLC auto-detect the best decoder (V4L2 M2M / avcodec).
+			"--avcodec-hw=any",           // Auto-select HW decoder (V4L2 M2M on RPi5)
 
 			// --- Display ---
+			// Do NOT force --vout or --no-xlib — let VLC auto-detect:
+			//   Desktop running → X11/GL fullscreen window
+			//   Console/headless → KMS/DRM direct output
+			"--fullscreen",
 			"--no-osd",
 			"--no-dbus",
 			"--no-video-title-show",
@@ -72,20 +77,28 @@ func (b *prodBackend) Init(zone template.Zone, screenW, screenH int) error {
 			"--quiet",
 		}
 
-		// For non-fullscreen zones, add position/size overrides.
+		// For non-fullscreen zones, replace fullscreen with position/size.
 		if zone.Width < 100 || zone.Height < 100 || zone.X > 0 || zone.Y > 0 {
 			pixelX := zone.X * screenW / 100
 			pixelY := zone.Y * screenH / 100
 			pixelW := zone.Width * screenW / 100
 			pixelH := zone.Height * screenH / 100
+
+			// Remove --fullscreen for multi-zone
+			filtered := flags[:0]
+			for _, f := range flags {
+				if f != "--fullscreen" {
+					filtered = append(filtered, f)
+				}
+			}
+			flags = filtered
+
 			flags = append(flags,
 				"--video-x="+strconv.Itoa(pixelX),
 				"--video-y="+strconv.Itoa(pixelY),
 				"--width="+strconv.Itoa(pixelW),
 				"--height="+strconv.Itoa(pixelH),
 			)
-		} else {
-			flags = append(flags, "--fullscreen")
 		}
 
 		vlcInitErr = libvlc.Init(flags...)
@@ -102,7 +115,7 @@ func (b *prodBackend) Init(zone template.Zone, screenW, screenH int) error {
 	}
 	b.listPlayer = listPlayer
 
-	log.Printf("[prod-backend:%s] libVLC ListPlayer initialized with MMAL", zone.ID)
+	log.Printf("[prod-backend:%s] libVLC ListPlayer initialized (auto video output)", zone.ID)
 	return nil
 }
 
