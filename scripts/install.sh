@@ -58,7 +58,6 @@ apt-get install -y --no-install-recommends \
     vlc \
     vlc-plugin-base \
     vlc-plugin-video-output \
-    xdotool \
     dpkg-dev
 
 # --- Step 2: Install Go ---
