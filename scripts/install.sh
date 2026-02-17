@@ -80,6 +80,9 @@ cd "${INSTALL_DIR}"
 # --- Step 4: Build the binary ---
 log "Step 4/6: Building ${APP} (native CGO + MMAL)..."
 export CGO_ENABLED=1
+export GO111MODULE=on
+export GOPATH=/tmp/go-path
+export GOMODCACHE=/tmp/go-path/pkg/mod
 
 go mod tidy
 
@@ -139,6 +142,7 @@ fi
 # --- Cleanup ---
 cd /
 rm -rf "${INSTALL_DIR}"
+rm -rf /tmp/go-path
 
 # --- Done ---
 echo ""
