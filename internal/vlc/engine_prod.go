@@ -50,7 +50,6 @@ func (b *prodBackend) Init(zone template.Zone, screenW, screenH int) error {
 			"--no-dbus",              // No D-Bus interface
 			"--no-snapshot-preview",  // No snapshot UI
 			"--no-spu",               // No subtitles
-			"--no-audio-visual",      // No audio visualizations
 
 			// === VIDEO OUTPUT: contain mode (fit with black borders) ===
 			// VLC default is "contain" — preserves aspect ratio, black bars if needed.
