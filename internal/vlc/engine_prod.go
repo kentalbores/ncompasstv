@@ -37,43 +37,32 @@ func (b *prodBackend) Init(zone template.Zone, screenW, screenH int) error {
 	b.stopped = make(chan struct{})
 
 	vlcInitOnce.Do(func() {
+		// Only flags verified to work on VLC 3.0.23 (Debian/RPi OS).
+		// VLC 3.0 rejects unknown flags at startup, so every flag here
+		// must be a real VLC 3.0 option.
 		flags := []string{
-			// === KIOSK MODE: absolutely nothing visible except video ===
-			"--no-video-deco",        // Remove window title bar and borders
-			"--no-embedded-video",    // VLC owns its own window (not embedded in a parent)
-			"--video-on-top",         // Always on top of other windows
-			"--fullscreen",           // True fullscreen (WM takes over)
-			"--mouse-hide-timeout=0", // Hide mouse cursor immediately
-			"--no-video-title-show",  // No filename overlay on video
-			"--no-osd",               // No on-screen display (no controls, no volume bar)
-			"--no-interact",          // No interaction prompts
-			"--no-dbus",              // No D-Bus interface
-			"--no-snapshot-preview",  // No snapshot UI
-			"--no-spu",               // No subtitles
-
-			// === VIDEO OUTPUT: contain mode (fit with black borders) ===
-			// VLC default is "contain" — preserves aspect ratio, black bars if needed.
-			// Do NOT set --aspect-ratio or --crop; let VLC auto-detect from the video.
-			"--autoscale",     // Scale video to fit the output window
-			"--no-wall-paper", // Don't render as wallpaper
+			// === KIOSK / FULLSCREEN ===
+			"--fullscreen",          // True fullscreen
+			"--video-on-top",        // Always on top of desktop/taskbar
+			"--no-video-title-show", // No filename overlay on the video
+			"--no-osd",              // No on-screen display (volume, play/pause)
+			"--no-spu",              // No subtitles
+			"--no-dbus",             // No D-Bus (prevents external control)
 
 			// === HARDWARE DECODING (RPi5 VideoCore VII) ===
-			"--avcodec-hw=any",           // V4L2 M2M / VAAPI auto-detect
-			"--avcodec-threads=4",        // Use all 4 RPi5 Cortex-A76 cores
-			"--avcodec-fast",             // Speed-optimized decode paths
-			"--avcodec-skiploopfilter=0", // Keep deblocking filter (prevents blockiness)
+			"--avcodec-hw=any",           // V4L2 M2M auto-detect
+			"--avcodec-threads=4",        // Use all 4 Cortex-A76 cores
+			"--avcodec-skiploopfilter=0", // Keep deblocking (prevents blockiness)
 
-			// === BUFFERING (critical for smooth 4K 60fps) ===
+			// === BUFFERING (smooth 4K 60fps) ===
 			"--file-caching=8000",    // 8s file read-ahead
 			"--network-caching=3000", // 3s network buffer
 			"--live-caching=3000",    // 3s live buffer
 			"--disc-caching=3000",    // 3s disc buffer
 
-			// === FRAME TIMING ===
-			// Let VLC manage frame pacing. On RPi5, forcing no-drop causes
-			// a frame backlog that kills quality. VLC will drop only if needed.
+			// === TIMING ===
 			"--clock-jitter=0", // Tight clock sync
-			"--deinterlace=0",  // Disabled (4K content is progressive)
+			"--deinterlace=0",  // Off (4K is progressive)
 
 			// === AUDIO ===
 			"--aout=alsa",
