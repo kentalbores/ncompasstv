@@ -119,7 +119,7 @@ if [[ ! -f "${DEB_FILE}" ]]; then
 fi
 
 log "Installing via apt..."
-apt install -y "./${DEB_FILE}"
+apt install -y --allow-downgrades "./${DEB_FILE}"
 
 # --- Step 6: GPU / Boot config for 4K ---
 log "Step 6/6: Configuring boot for 4K..."
@@ -165,11 +165,16 @@ echo "  Quick start:"
 echo "    sudo cp *.mp4 /playlist/"
 echo "    n-compasstv run"
 echo ""
+echo "  Templates (multi-zone layouts):"
+echo "    n-compasstv run -t /etc/n-compasstv/templates/fullscreen.json"
+echo "    n-compasstv run -t /etc/n-compasstv/templates/main-with-footer.json"
+echo "    n-compasstv run -t /etc/n-compasstv/templates/l-shape.json"
+echo ""
 echo "  As a service (starts on boot):"
 echo "    sudo systemctl start n-compasstv"
 echo ""
 echo "  Commands:"
-echo "    n-compasstv run         Start player"
+echo "    n-compasstv run         Start player (fullscreen)"
 echo "    n-compasstv version     Show version"
 echo "    n-compasstv check       Health check"
 echo ""

@@ -31,6 +31,12 @@ chmod 755 "${DEB_ROOT}/usr/local/bin/n-compasstv"
 # Copy the systemd unit
 cp deploy/n-compasstv.service "${DEB_ROOT}/etc/systemd/system/n-compasstv.service"
 
+# Copy template files so users can reference them
+mkdir -p "${DEB_ROOT}/etc/n-compasstv/templates"
+if [[ -d "templates" ]]; then
+    cp templates/*.json "${DEB_ROOT}/etc/n-compasstv/templates/" 2>/dev/null || true
+fi
+
 # Generate a default config.json if one doesn't exist
 cat > "${DEB_ROOT}/etc/n-compasstv/config.json" <<CONFIGEOF
 {
