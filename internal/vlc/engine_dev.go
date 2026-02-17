@@ -2,7 +2,6 @@
 
 // Development backend: uses a single VLC subprocess per zone with its
 // built-in playlist for gapless playback. No CGO required.
-// VLC handles seamless transitions between videos and image display natively.
 package vlc
 
 import (
@@ -43,19 +42,14 @@ func (b *devBackend) Init(zone template.Zone, screenW, screenH int) error {
 
 	log.Printf("[dev-backend:%s] using VLC at: %s", zone.ID, path)
 	log.Println("[dev-backend] *** DEVELOPMENT MODE — gapless via VLC subprocess ***")
-	log.Println("[dev-backend] *** Production builds (linux/arm64) use CGO/libVLC with MMAL ***")
 	return nil
 }
 
-func (b *devBackend) PlayAll(files []string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
+func (b *devBackend) PlayAll(files []string, stopCh <-chan struct{}) error {
 	if len(files) == 0 {
 		return fmt.Errorf("empty playlist")
 	}
 
-	// Count media types for logging.
 	var videos, images int
 	for _, f := range files {
 		switch media.Detect(f) {
@@ -69,63 +63,60 @@ func (b *devBackend) PlayAll(files []string) error {
 		b.zone.ID, videos, images)
 
 	args := b.buildArgs(files)
+
+	// Start VLC (short lock).
+	b.mu.Lock()
 	b.cmd = exec.Command(b.vlcPath, args...)
 	b.cmd.Stdout = os.Stdout
 	b.cmd.Stderr = os.Stderr
+	cmd := b.cmd
+	b.mu.Unlock()
 
-	if err := b.cmd.Start(); err != nil {
+	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("vlc start failed: %w", err)
 	}
 
-	// Wait blocks until VLC exits (user stop, crash, or playlist change).
-	err := b.cmd.Wait()
-	b.cmd = nil
+	// Wait for VLC to exit in a goroutine.
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- cmd.Wait()
+	}()
 
-	if err != nil {
-		// Exit errors are normal when we kill the process on playlist change.
+	// Block until VLC exits OR we're told to stop. NO MUTEX HELD.
+	select {
+	case <-stopCh:
+		b.kill()
+		return nil
+	case <-doneCh:
 		return nil
 	}
-	return nil
 }
 
 func (b *devBackend) buildArgs(files []string) []string {
 	args := []string{
-		// --- Display ---
 		"--fullscreen",
 		"--no-video-title-show",
 		"--no-osd",
 		"--loop",
 		"--no-random",
-
-		// --- Hardware Decoding (critical for 4K) ---
-		"--avcodec-hw=any",           // Auto-select best HW decoder (DXVA2/D3D11VA on Win, VAAPI on Linux)
-		"--avcodec-threads=0",        // Auto-detect optimal thread count for CPU decoding fallback
-
-		// --- Buffering (prevents stutter and quality drops) ---
-		"--file-caching=5000",        // 5s file read-ahead buffer
-		"--network-caching=3000",     // 3s network buffer
-		"--live-caching=3000",        // 3s live stream buffer
-		"--disc-caching=3000",        // 3s disc buffer
-		"--clock-jitter=0",           // Disable clock jitter compensation
-		"--clock-synchro=0",          // Disable clock sync (smoother playback)
-
-		// --- Quality Preservation ---
-		"--no-drop-late-frames",      // NEVER drop frames — prevents quality degradation
-		"--no-skip-frames",           // NEVER skip frames — prevents blocky artifacts
-		"--avcodec-skiploopfilter=0", // Keep deblocking filter (prevents blockiness)
-		"--avcodec-fast",             // Use fast decoding paths where safe
-		"--deinterlace=0",            // Disable deinterlacing (progressive 4K content)
-
-		// --- Video Output (Windows: Direct3D11 for GPU compositing) ---
-		"--vout=direct3d11",          // D3D11 output — GPU-composited, tear-free
-
-		// --- Image Support ---
+		"--avcodec-hw=any",
+		"--avcodec-threads=0",
+		"--file-caching=5000",
+		"--network-caching=3000",
+		"--live-caching=3000",
+		"--disc-caching=3000",
+		"--clock-jitter=0",
+		"--clock-synchro=0",
+		"--no-drop-late-frames",
+		"--no-skip-frames",
+		"--avcodec-skiploopfilter=0",
+		"--avcodec-fast",
+		"--deinterlace=0",
+		"--vout=direct3d11",
 		"--image-duration=" + strconv.Itoa(media.DefaultImageDuration),
-
 		"--quiet",
 	}
 
-	// Zone positioning — only add if not fullscreen (100x100 at 0,0).
 	if b.zone.Width < 100 || b.zone.Height < 100 || b.zone.X > 0 || b.zone.Y > 0 {
 		pixelX := b.zone.X * b.screenW / 100
 		pixelY := b.zone.Y * b.screenH / 100
@@ -143,13 +134,20 @@ func (b *devBackend) buildArgs(files []string) []string {
 		)
 	}
 
-	// Append all media files as VLC playlist items.
 	args = append(args, files...)
-
 	return args
 }
 
 func (b *devBackend) Stop() {
+	b.kill()
+}
+
+func (b *devBackend) Release() {
+	b.kill()
+	log.Printf("[dev-backend:%s] released", b.zone.ID)
+}
+
+func (b *devBackend) kill() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.cmd != nil && b.cmd.Process != nil {
@@ -158,12 +156,6 @@ func (b *devBackend) Stop() {
 	}
 }
 
-func (b *devBackend) Release() {
-	b.Stop()
-	log.Printf("[dev-backend:%s] released", b.zone.ID)
-}
-
-// findVLC locates the VLC executable on the system.
 func findVLC() (string, error) {
 	if path, err := exec.LookPath("vlc"); err == nil {
 		return path, nil

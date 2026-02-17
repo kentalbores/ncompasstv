@@ -3,7 +3,6 @@
 // Production backend: CGO bindings to libVLC with RPi5 hardware acceleration.
 // Uses libVLC's MediaList + ListPlayer for true gapless playback per zone.
 // RPi5 uses VideoCore VII — video output auto-detected (KMS/X11).
-// This file only compiles on linux/arm64 (the Raspberry Pi 5 target).
 package vlc
 
 import (
@@ -21,14 +20,12 @@ import (
 var vlcInitOnce sync.Once
 var vlcInitErr error
 
-// prodBackend wraps libVLC's ListPlayer for gapless hardware-accelerated
-// playback on the Raspberry Pi 5.
 type prodBackend struct {
 	mu         sync.Mutex
 	listPlayer *libvlc.ListPlayer
 	mediaList  *libvlc.MediaList
 	zone       template.Zone
-	playing    bool
+	stopped    chan struct{}
 }
 
 func newBackend() (Backend, error) {
@@ -37,54 +34,35 @@ func newBackend() (Backend, error) {
 
 func (b *prodBackend) Init(zone template.Zone, screenW, screenH int) error {
 	b.zone = zone
+	b.stopped = make(chan struct{})
 
-	// Initialize libVLC once globally (shared across all zones).
 	vlcInitOnce.Do(func() {
 		flags := []string{
-			// --- RPi5 Hardware Decoding ---
-			// RPi5 uses VideoCore VII — MMAL is deprecated.
-			// Let VLC auto-detect the best decoder (V4L2 M2M / avcodec).
-			"--avcodec-hw=any",           // Auto-select HW decoder (V4L2 M2M on RPi5)
-
-			// --- Display ---
-			// Do NOT force --vout or --no-xlib — let VLC auto-detect:
-			//   Desktop running → X11/GL fullscreen window
-			//   Console/headless → KMS/DRM direct output
+			"--avcodec-hw=any",
 			"--fullscreen",
 			"--no-osd",
 			"--no-dbus",
 			"--no-video-title-show",
-
-			// --- Audio ---
 			"--aout=alsa",
-
-			// --- Buffering (prevents stutter on 4K streams) ---
-			"--file-caching=5000",        // 5s file read-ahead buffer
-			"--network-caching=3000",     // 3s network buffer
-			"--live-caching=3000",        // 3s live stream buffer
-			"--clock-jitter=0",           // Disable clock jitter compensation
-			"--clock-synchro=0",          // Disable clock sync (smoother playback)
-
-			// --- Quality Preservation ---
-			"--no-drop-late-frames",      // NEVER drop frames
-			"--no-skip-frames",           // NEVER skip frames
-			"--avcodec-skiploopfilter=0", // Keep deblocking filter active
-			"--deinterlace=0",            // Disable deinterlacing (progressive 4K content)
-
-			// --- Image Support ---
+			"--file-caching=5000",
+			"--network-caching=3000",
+			"--live-caching=3000",
+			"--clock-jitter=0",
+			"--clock-synchro=0",
+			"--no-drop-late-frames",
+			"--no-skip-frames",
+			"--avcodec-skiploopfilter=0",
+			"--deinterlace=0",
 			"--image-duration=" + strconv.Itoa(media.DefaultImageDuration),
-
 			"--quiet",
 		}
 
-		// For non-fullscreen zones, replace fullscreen with position/size.
 		if zone.Width < 100 || zone.Height < 100 || zone.X > 0 || zone.Y > 0 {
 			pixelX := zone.X * screenW / 100
 			pixelY := zone.Y * screenH / 100
 			pixelW := zone.Width * screenW / 100
 			pixelH := zone.Height * screenH / 100
 
-			// Remove --fullscreen for multi-zone
 			filtered := flags[:0]
 			for _, f := range flags {
 				if f != "--fullscreen" {
@@ -92,7 +70,6 @@ func (b *prodBackend) Init(zone template.Zone, screenW, screenH int) error {
 				}
 			}
 			flags = filtered
-
 			flags = append(flags,
 				"--video-x="+strconv.Itoa(pixelX),
 				"--video-y="+strconv.Itoa(pixelY),
@@ -108,28 +85,29 @@ func (b *prodBackend) Init(zone template.Zone, screenW, screenH int) error {
 		return fmt.Errorf("libvlc init failed: %w", vlcInitErr)
 	}
 
-	// Create a ListPlayer for gapless playlist playback.
 	listPlayer, err := libvlc.NewListPlayer()
 	if err != nil {
 		return fmt.Errorf("list player creation failed: %w", err)
 	}
+
+	b.mu.Lock()
 	b.listPlayer = listPlayer
+	b.mu.Unlock()
 
 	log.Printf("[prod-backend:%s] libVLC ListPlayer initialized (auto video output)", zone.ID)
 	return nil
 }
 
-func (b *prodBackend) PlayAll(files []string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
+func (b *prodBackend) PlayAll(files []string, stopCh <-chan struct{}) error {
 	if len(files) == 0 {
 		return fmt.Errorf("empty playlist")
 	}
 
-	// Create a new media list from the file paths.
+	// Build media list (short lock, no blocking).
+	b.mu.Lock()
 	list, err := libvlc.NewMediaList()
 	if err != nil {
+		b.mu.Unlock()
 		return fmt.Errorf("media list creation failed: %w", err)
 	}
 
@@ -146,14 +124,13 @@ func (b *prodBackend) PlayAll(files []string) error {
 		}
 	}
 
-	// Release old media list if any.
 	if b.mediaList != nil {
 		b.mediaList.Release()
 	}
 	b.mediaList = list
 
-	// Assign the list and set loop mode.
 	if err := b.listPlayer.SetMediaList(list); err != nil {
+		b.mu.Unlock()
 		return fmt.Errorf("set media list failed: %w", err)
 	}
 	b.listPlayer.SetPlaybackMode(libvlc.Loop)
@@ -171,22 +148,37 @@ func (b *prodBackend) PlayAll(files []string) error {
 		b.zone.ID, videos, images)
 
 	if err := b.listPlayer.Play(); err != nil {
+		b.mu.Unlock()
 		return fmt.Errorf("play failed: %w", err)
 	}
-	b.playing = true
 
-	// Block until stopped externally.
-	// ListPlayer loops internally — we just wait.
-	select {}
+	// Reset the stopped channel.
+	b.stopped = make(chan struct{})
+	b.mu.Unlock()
+
+	// Block until Stop() is called or permanent shutdown.
+	// NO MUTEX HELD while blocking.
+	select {
+	case <-stopCh:
+		b.listPlayer.Stop()
+		return nil
+	case <-b.stopped:
+		return nil
+	}
 }
 
 func (b *prodBackend) Stop() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.playing {
+	if b.listPlayer != nil {
 		b.listPlayer.Stop()
-		b.playing = false
 	}
+	// Signal PlayAll to unblock.
+	select {
+	case <-b.stopped:
+	default:
+		close(b.stopped)
+	}
+	b.mu.Unlock()
 }
 
 func (b *prodBackend) Release() {
