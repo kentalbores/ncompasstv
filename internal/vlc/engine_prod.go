@@ -1,7 +1,7 @@
 //go:build linux && arm64
 
 // Production backend: CGO bindings to libVLC for Raspberry Pi 5.
-// Runs in kiosk mode (no GUI) with hardware-accelerated decoding.
+// Runs in kiosk mode — no GUI, no decorations, no OSD, just video.
 // Uses libVLC's MediaList + ListPlayer for gapless playback.
 package vlc
 
@@ -38,39 +38,43 @@ func (b *prodBackend) Init(zone template.Zone, screenW, screenH int) error {
 
 	vlcInitOnce.Do(func() {
 		flags := []string{
-			// === KIOSK MODE — no GUI whatsoever ===
-			"--intf=dummy",               // No Qt/GUI interface at all
-			"--no-interact",              // No user interaction prompts
-			"--mouse-hide-timeout=0",     // Hide mouse cursor immediately
-			"--no-video-title-show",      // No filename overlay
-			"--no-osd",                   // No on-screen display
-			"--no-dbus",                  // No D-Bus (headless)
-			"--no-qt-privacy-ask",        // Skip Qt privacy dialog
-			"--no-snapshot-preview",      // No snapshot UI
+			// === KIOSK MODE: absolutely nothing visible except video ===
+			"--no-video-deco",        // Remove window title bar and borders
+			"--no-embedded-video",    // VLC owns its own window (not embedded in a parent)
+			"--video-on-top",         // Always on top of other windows
+			"--fullscreen",           // True fullscreen (WM takes over)
+			"--mouse-hide-timeout=0", // Hide mouse cursor immediately
+			"--no-video-title-show",  // No filename overlay on video
+			"--no-osd",               // No on-screen display (no controls, no volume bar)
+			"--no-interact",          // No interaction prompts
+			"--no-dbus",              // No D-Bus interface
+			"--no-snapshot-preview",  // No snapshot UI
+			"--no-spu",               // No subtitles
+			"--no-audio-visual",      // No audio visualizations
 
-			// === VIDEO OUTPUT ===
-			"--fullscreen",               // True fullscreen
-			"--embedded-video",           // Embed video in VLC window
-			"--no-video-deco",            // No window decorations
+			// === VIDEO OUTPUT: contain mode (fit with black borders) ===
+			// VLC default is "contain" — preserves aspect ratio, black bars if needed.
+			// Do NOT set --aspect-ratio or --crop; let VLC auto-detect from the video.
+			"--autoscale",     // Scale video to fit the output window
+			"--no-wall-paper", // Don't render as wallpaper
 
 			// === HARDWARE DECODING (RPi5 VideoCore VII) ===
 			"--avcodec-hw=any",           // V4L2 M2M / VAAPI auto-detect
-			"--avcodec-threads=4",        // Use all 4 RPi5 cores for decoding
-			"--avcodec-fast",             // Enable speed optimizations in decoder
-			"--avcodec-skiploopfilter=0", // Keep deblocking (prevents blockiness)
+			"--avcodec-threads=4",        // Use all 4 RPi5 Cortex-A76 cores
+			"--avcodec-fast",             // Speed-optimized decode paths
+			"--avcodec-skiploopfilter=0", // Keep deblocking filter (prevents blockiness)
 
-			// === BUFFERING (critical for 4K 60fps) ===
-			"--file-caching=8000",        // 8s file read-ahead (4K files are large)
-			"--network-caching=3000",     // 3s network buffer
-			"--live-caching=3000",        // 3s live buffer
-			"--disc-caching=3000",        // 3s disc buffer
+			// === BUFFERING (critical for smooth 4K 60fps) ===
+			"--file-caching=8000",    // 8s file read-ahead
+			"--network-caching=3000", // 3s network buffer
+			"--live-caching=3000",    // 3s live buffer
+			"--disc-caching=3000",    // 3s disc buffer
 
 			// === FRAME TIMING ===
-			// DO NOT use --no-drop-late-frames or --no-skip-frames on Pi.
-			// The RPi5 GPU needs to manage its own frame pacing for 4K@60fps.
-			// Forcing zero drops causes a frame backlog → stutter → quality collapse.
-			"--clock-jitter=0",           // Tight clock
-			"--deinterlace=0",            // Off (progressive 4K content)
+			// Let VLC manage frame pacing. On RPi5, forcing no-drop causes
+			// a frame backlog that kills quality. VLC will drop only if needed.
+			"--clock-jitter=0", // Tight clock sync
+			"--deinterlace=0",  // Disabled (4K content is progressive)
 
 			// === AUDIO ===
 			"--aout=alsa",
@@ -81,14 +85,14 @@ func (b *prodBackend) Init(zone template.Zone, screenW, screenH int) error {
 			"--quiet",
 		}
 
-		// Multi-zone: replace fullscreen with positioned window.
+		// Multi-zone: replace fullscreen with explicit window placement.
 		if zone.Width < 100 || zone.Height < 100 || zone.X > 0 || zone.Y > 0 {
 			pixelX := zone.X * screenW / 100
 			pixelY := zone.Y * screenH / 100
 			pixelW := zone.Width * screenW / 100
 			pixelH := zone.Height * screenH / 100
 
-			filtered := flags[:0]
+			filtered := make([]string, 0, len(flags))
 			for _, f := range flags {
 				if f != "--fullscreen" {
 					filtered = append(filtered, f)
@@ -119,7 +123,7 @@ func (b *prodBackend) Init(zone template.Zone, screenW, screenH int) error {
 	b.listPlayer = listPlayer
 	b.mu.Unlock()
 
-	log.Printf("[prod-backend:%s] initialized (kiosk mode, HW decode, 4-thread)", zone.ID)
+	log.Printf("[prod-backend:%s] initialized (kiosk, no-deco, fullscreen, HW decode)", zone.ID)
 	return nil
 }
 
