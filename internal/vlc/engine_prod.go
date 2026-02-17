@@ -3,6 +3,8 @@
 // Production backend: CGO bindings to libVLC for Raspberry Pi 5.
 // Runs in kiosk mode — no GUI, no decorations, no OSD, just video.
 // Uses libVLC's MediaList + ListPlayer for gapless playback.
+// Fullscreen is set via the libVLC API (not init flags) because
+// --fullscreen does not work with ListPlayer.
 package vlc
 
 import (
@@ -10,6 +12,7 @@ import (
 	"log"
 	"strconv"
 	"sync"
+	"time"
 
 	"player-native/internal/media"
 	"player-native/internal/template"
@@ -26,6 +29,7 @@ type prodBackend struct {
 	mediaList  *libvlc.MediaList
 	zone       template.Zone
 	stopped    chan struct{}
+	isFullZone bool
 }
 
 func newBackend() (Backend, error) {
@@ -35,14 +39,14 @@ func newBackend() (Backend, error) {
 func (b *prodBackend) Init(zone template.Zone, screenW, screenH int) error {
 	b.zone = zone
 	b.stopped = make(chan struct{})
+	b.isFullZone = zone.X == 0 && zone.Y == 0 && zone.Width >= 100 && zone.Height >= 100
 
 	vlcInitOnce.Do(func() {
 		// Only flags verified to work on VLC 3.0.23 (Debian/RPi OS).
-		// VLC 3.0 rejects unknown flags at startup, so every flag here
-		// must be a real VLC 3.0 option.
+		// NOTE: --fullscreen is NOT included here because it does not work
+		// with ListPlayer. Fullscreen is set via the API after Play().
 		flags := []string{
-			// === KIOSK / FULLSCREEN ===
-			"--fullscreen",          // True fullscreen
+			// === KIOSK: suppress all overlays ===
 			"--video-on-top",        // Always on top of desktop/taskbar
 			"--no-video-title-show", // No filename overlay on the video
 			"--no-osd",              // No on-screen display (volume, play/pause)
@@ -73,20 +77,13 @@ func (b *prodBackend) Init(zone template.Zone, screenW, screenH int) error {
 			"--quiet",
 		}
 
-		// Multi-zone: replace fullscreen with explicit window placement.
+		// Multi-zone: set explicit window geometry.
 		if zone.Width < 100 || zone.Height < 100 || zone.X > 0 || zone.Y > 0 {
 			pixelX := zone.X * screenW / 100
 			pixelY := zone.Y * screenH / 100
 			pixelW := zone.Width * screenW / 100
 			pixelH := zone.Height * screenH / 100
 
-			filtered := make([]string, 0, len(flags))
-			for _, f := range flags {
-				if f != "--fullscreen" {
-					filtered = append(filtered, f)
-				}
-			}
-			flags = filtered
 			flags = append(flags,
 				"--video-x="+strconv.Itoa(pixelX),
 				"--video-y="+strconv.Itoa(pixelY),
@@ -111,7 +108,7 @@ func (b *prodBackend) Init(zone template.Zone, screenW, screenH int) error {
 	b.listPlayer = listPlayer
 	b.mu.Unlock()
 
-	log.Printf("[prod-backend:%s] initialized (kiosk, no-deco, fullscreen, HW decode)", zone.ID)
+	log.Printf("[prod-backend:%s] initialized (API fullscreen, HW decode, 4-thread)", zone.ID)
 	return nil
 }
 
@@ -168,6 +165,12 @@ func (b *prodBackend) PlayAll(files []string, stopCh <-chan struct{}) error {
 		return fmt.Errorf("play failed: %w", err)
 	}
 
+	// Set fullscreen via the libVLC API (not init flags).
+	// This is the only reliable way with ListPlayer.
+	if b.isFullZone {
+		go b.enableFullscreen()
+	}
+
 	b.stopped = make(chan struct{})
 	b.mu.Unlock()
 
@@ -178,6 +181,32 @@ func (b *prodBackend) PlayAll(files []string, stopCh <-chan struct{}) error {
 	case <-b.stopped:
 		return nil
 	}
+}
+
+// enableFullscreen waits for the video output window to be created,
+// then sets fullscreen via the libVLC C API (libvlc_set_fullscreen).
+// This removes window decorations and covers the desktop taskbar.
+func (b *prodBackend) enableFullscreen() {
+	// The video output window is created asynchronously after Play().
+	// Poll until a video output exists, then set fullscreen.
+	for i := 0; i < 50; i++ {
+		time.Sleep(100 * time.Millisecond)
+
+		player, err := b.listPlayer.Player()
+		if err != nil {
+			continue
+		}
+
+		if player.VideoOutputCount() > 0 {
+			if err := player.SetFullScreen(true); err != nil {
+				log.Printf("[prod-backend:%s] fullscreen error: %v", b.zone.ID, err)
+			} else {
+				log.Printf("[prod-backend:%s] fullscreen enabled via API", b.zone.ID)
+			}
+			return
+		}
+	}
+	log.Printf("[prod-backend:%s] warning: could not enable fullscreen (no video output after 5s)", b.zone.ID)
 }
 
 func (b *prodBackend) Stop() {
